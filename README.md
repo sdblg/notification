@@ -131,6 +131,8 @@ Outbound email-д дараах header-ууд автоматаар орно:
 
 - `POST /v1/notify`
 - `Content-Type: application/json`
+- `Authorization: Bearer <API_KEY>`
+- Optional: `X-Trace-Id: <your-trace-id>` (өгөөгүй бол service UUID үүсгэнэ)
 
 #### Request JSON
 
@@ -152,7 +154,8 @@ HTTP `202 Accepted`
 ```json
 {
   "status": "accepted",
-  "request_id": "a4af1988-b4b4-4f8b-af7c-130776c6b6bb"
+  "request_id": "a4af1988-b4b4-4f8b-af7c-130776c6b6bb",
+  "trace_id": "9e962e9a-f505-4a18-a2cc-31ec71b5668c"
 }
 ```
 
@@ -163,6 +166,8 @@ HTTP `202 Accepted`
 - `429` queue full
 - `500` internal enqueue error
 
+Алдааны response-үүд мөн `trace_id` агуулна. API болон worker log-ууд ижил `trace_id`-гаар холбогдож харагдана.
+
 ## Environment Variables
 
 | Name | Required | Default | Description |
@@ -170,6 +175,7 @@ HTTP `202 Accepted`
 | `APP_PORT` | No | `8080` | HTTP порт |
 | `WORKER_COUNT` | No | `4` | Worker pool хэмжээ |
 | `QUEUE_SIZE` | No | `100` | Queue capacity |
+| `API_KEY` | Yes | - | `/v1/notify` endpoint-ийн Bearer auth key |
 | `MAIL_FROM` | No | `no-reply@mongols.app` | From email |
 | `MAIL_FROM_NAME` | No | `Notification Service` | Brevo sender нэр |
 | `RESEND_API_KEY` | Yes* | - | Resend API key |
@@ -191,6 +197,7 @@ HTTP `202 Accepted`
 export APP_PORT=8080
 export WORKER_COUNT=4
 export QUEUE_SIZE=100
+export API_KEY=your_service_api_key
 export MAIL_FROM=no-reply@example.com
 export MAIL_FROM_NAME="Notification Service"
 
@@ -210,6 +217,8 @@ go run ./cmd/api
 
 ```bash
 curl -i -X POST http://localhost:8080/v1/notify \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "X-Trace-Id: demo-trace-001" \
   -H "Content-Type: application/json" \
   -d '{
     "to": "user@example.com",
@@ -217,6 +226,8 @@ curl -i -X POST http://localhost:8080/v1/notify \
     "text": "Hello from Notification Service"
   }'
 ```
+
+`X-Trace-Id` өгөөгүй тохиолдолд API өөрөө UUID үүсгэж response header (`X-Trace-Id`) болон JSON body (`trace_id`) дээр буцаана.
 
 ## Docker
 

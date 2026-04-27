@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/sdblg/notification/pkg/models"
 )
 
 const defaultResendEndpoint = "https://api.resend.com/emails"
@@ -42,18 +44,18 @@ func (r *ResendProvider) GetName() string {
 	return "resend"
 }
 
-func (r *ResendProvider) Send(ctx context.Context, message EmailMessage) error {
+func (r *ResendProvider) Send(ctx context.Context, message models.EmailMessage) error {
 	payload := map[string]any{
 		"from":    message.From,
 		"to":      []string{message.To},
 		"subject": message.Subject,
 		"headers": message.Headers,
 	}
-	if message.HTML != "" {
-		payload["html"] = message.HTML
+	if message.Body.Rich != "" {
+		payload["html"] = message.Body.Rich
 	}
-	if message.Text != "" {
-		payload["text"] = message.Text
+	if message.Body.Plain != "" {
+		payload["text"] = message.Body.Plain
 	}
 
 	body, err := json.Marshal(payload)

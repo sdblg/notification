@@ -3,15 +3,18 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
-	"github.com/sod/notification/internal/provider"
+	"github.com/sdblg/notification/internal/provider"
+	"github.com/sdblg/notification/pkg/models"
 )
 
 type NotifyHandler struct {
-	pool *WorkerPool
-	from string
+	pool   *WorkerPool
+	from   string
+	logger *slog.Logger
 }
 
 type NotifyRequest struct {
@@ -24,19 +27,24 @@ type NotifyRequest struct {
 type NotifyResponse struct {
 	Status    string `json:"status"`
 	RequestID string `json:"request_id,omitempty"`
+	TraceID   string `json:"trace_id,omitempty"`
 	Message   string `json:"message,omitempty"`
 }
 
-func NewNotifyHandler(pool *WorkerPool, from string) *NotifyHandler {
+func NewNotifyHandler(pool *WorkerPool, from string, logger *slog.Logger) *NotifyHandler {
 	return &NotifyHandler{
-		pool: pool,
-		from: from,
+		pool:   pool,
+		from:   from,
+		logger: logger,
 	}
 }
 
 func (h *NotifyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	logger := LoggerForRequest(r, h.logger, "notify_handler")
+
 	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, NotifyResponse{
+		logger.Warn("method not allowed", "method", r.Method, "path", r.URL.Path)
+		writeJSON(w, r, http.StatusMethodNotAllowed, NotifyResponse{
 			Status:  "error",
 			Message: "method not allowed",
 		})
@@ -45,7 +53,8 @@ func (h *NotifyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var req NotifyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, NotifyResponse{
+		logger.Warn("invalid json payload", "path", r.URL.Path, "error", err)
+		writeJSON(w, r, http.StatusBadRequest, NotifyResponse{
 			Status:  "error",
 			Message: "invalid json payload",
 		})
@@ -55,26 +64,26 @@ func (h *NotifyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	req.To = strings.TrimSpace(req.To)
 	req.Subject = strings.TrimSpace(req.Subject)
 
+	body := models.EmailBody{Plain: req.Text, Rich: req.HTML}
 	notif := provider.EmailNotification{
 		To:      req.To,
 		Subject: req.Subject,
-		HTML:    req.HTML,
-		Text:    req.Text,
+		Body:    body,
 	}
 	if err := notif.Validate(); err != nil {
-		writeJSON(w, http.StatusBadRequest, NotifyResponse{
+		logger.Warn("validation failed", "to", req.To, "subject", req.Subject, "error", err)
+		writeJSON(w, r, http.StatusBadRequest, NotifyResponse{
 			Status:  "error",
 			Message: err.Error(),
 		})
 		return
 	}
 
-	msg := provider.EmailMessage{
+	msg := models.EmailMessage{
 		From:    h.from,
 		To:      req.To,
 		Subject: req.Subject,
-		HTML:    req.HTML,
-		Text:    req.Text,
+		Body:    body,
 		Headers: map[string]string{
 			"Reply-To":                 h.from,
 			"List-Unsubscribe":         "<mailto:unsubscribe@example.com>",
@@ -91,20 +100,25 @@ func (h *NotifyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			statusCode = http.StatusTooManyRequests
 			message = "notification queue is full"
 		}
-		writeJSON(w, statusCode, NotifyResponse{
+		logger.Error("enqueue failed", "to", req.To, "subject", req.Subject, "status_code", statusCode, "error", err)
+		writeJSON(w, r, statusCode, NotifyResponse{
 			Status:  "error",
 			Message: message,
 		})
 		return
 	}
 
-	writeJSON(w, http.StatusAccepted, NotifyResponse{
+	logger.Info("notification accepted", "request_id", requestID, "to", req.To)
+	writeJSON(w, r, http.StatusAccepted, NotifyResponse{
 		Status:    "accepted",
 		RequestID: requestID,
 	})
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload NotifyResponse) {
+func writeJSON(w http.ResponseWriter, r *http.Request, status int, payload NotifyResponse) {
+	if id := TraceIDFromContext(r.Context()); id != "" {
+		payload.TraceID = id
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)

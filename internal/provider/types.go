@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"github.com/sdblg/notification/pkg/models"
 )
 
 const (
@@ -24,8 +26,7 @@ type Notification interface {
 type EmailNotification struct {
 	To      string
 	Subject string
-	HTML    string
-	Text    string
+	Body    models.EmailBody
 }
 
 func (n EmailNotification) Channel() string {
@@ -39,24 +40,15 @@ func (n EmailNotification) Validate() error {
 	if n.Subject == "" {
 		return errors.New("subject is required")
 	}
-	if n.HTML == "" && n.Text == "" {
-		return errors.New("either html or text body is required")
+	if n.Body.Plain == "" && n.Body.Rich == "" {
+		return errors.New("either plain or rich body is required")
 	}
 
 	return nil
 }
 
-type EmailMessage struct {
-	From    string
-	To      string
-	Subject string
-	HTML    string
-	Text    string
-	Headers map[string]string
-}
-
 type EmailProvider interface {
-	Send(ctx context.Context, message EmailMessage) error
+	Send(ctx context.Context, message models.EmailMessage) error
 	GetName() string
 }
 

@@ -4,29 +4,31 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/sod/notification/internal/provider"
+	"github.com/sdblg/notification/pkg/models"
 )
 
 var ErrQueueFull = errors.New("notification queue is full")
 
 type NotificationJob struct {
+	TraceID   string
 	RequestID string
-	Message   provider.EmailMessage
+	Message   models.EmailMessage
 }
 
 type WorkerPool struct {
 	workers int
 	queue   chan NotificationJob
 	sender  *FailoverEmailService
+	logger  *slog.Logger
 	wg      sync.WaitGroup
 }
 
-func NewWorkerPool(workers, queueSize int, sender *FailoverEmailService) (*WorkerPool, error) {
+func NewWorkerPool(workers, queueSize int, sender *FailoverEmailService, logger *slog.Logger) (*WorkerPool, error) {
 	if workers <= 0 {
 		return nil, fmt.Errorf("workers must be greater than 0")
 	}
@@ -41,6 +43,7 @@ func NewWorkerPool(workers, queueSize int, sender *FailoverEmailService) (*Worke
 		workers: workers,
 		queue:   make(chan NotificationJob, queueSize),
 		sender:  sender,
+		logger:  logger,
 	}, nil
 }
 
@@ -60,9 +63,10 @@ func (p *WorkerPool) Stop() {
 	p.wg.Wait()
 }
 
-func (p *WorkerPool) Enqueue(ctx context.Context, msg provider.EmailMessage) (string, error) {
+func (p *WorkerPool) Enqueue(ctx context.Context, msg models.EmailMessage) (string, error) {
 	reqID := uuid.NewString()
 	job := NotificationJob{
+		TraceID:   TraceIDFromContext(ctx),
 		RequestID: reqID,
 		Message:   msg,
 	}
@@ -78,8 +82,13 @@ func (p *WorkerPool) Enqueue(ctx context.Context, msg provider.EmailMessage) (st
 }
 
 func (p *WorkerPool) workerLoop(ctx context.Context, workerID int) {
-	log.Printf("worker %d started", workerID)
-	defer log.Printf("worker %d stopped", workerID)
+	logger := p.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger = logger.With("component", "worker_pool", "worker_id", workerID)
+	logger.Info("worker started")
+	defer logger.Info("worker stopped")
 
 	for {
 		select {
@@ -94,11 +103,15 @@ func (p *WorkerPool) workerLoop(ctx context.Context, workerID int) {
 			err := p.sender.Send(sendCtx, job.Message)
 			cancel()
 
+			jobLog := logger
+			if job.TraceID != "" {
+				jobLog = jobLog.With("trace_id", job.TraceID)
+			}
 			if err != nil {
-				log.Printf("worker=%d request_id=%s status=failed err=%v", workerID, job.RequestID, err)
+				jobLog.Error("send failed", "request_id", job.RequestID, "to", job.Message.To, "error", err)
 				continue
 			}
-			log.Printf("worker=%d request_id=%s status=sent to=%s", workerID, job.RequestID, job.Message.To)
+			jobLog.Info("send succeeded", "request_id", job.RequestID, "to", job.Message.To)
 		}
 	}
 }

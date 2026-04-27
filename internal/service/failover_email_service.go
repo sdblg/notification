@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sod/notification/internal/provider"
+	"github.com/sdblg/notification/internal/provider"
+	"github.com/sdblg/notification/pkg/models"
 )
 
 type FailoverEmailService struct {
@@ -27,7 +28,7 @@ func NewFailoverEmailService(providers ...provider.EmailProvider) (*FailoverEmai
 	return &FailoverEmailService{providers: filtered}, nil
 }
 
-func (s *FailoverEmailService) Send(ctx context.Context, msg provider.EmailMessage) error {
+func (s *FailoverEmailService) Send(ctx context.Context, msg models.EmailMessage) error {
 	var failures []string
 
 	for _, p := range s.providers {

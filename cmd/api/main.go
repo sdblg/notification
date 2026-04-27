@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,35 +11,46 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sod/notification/internal/provider"
-	"github.com/sod/notification/internal/service"
+	"github.com/sdblg/notification/internal/provider"
+	"github.com/sdblg/notification/internal/service"
 )
 
 func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+	slog.SetDefault(logger)
+
 	cfg := loadConfig()
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		logger.Error("missing required configuration", "key", "API_KEY")
+		os.Exit(1)
+	}
 
 	providers := make([]provider.EmailProvider, 0, 2)
 
 	if p, err := provider.NewResendProviderFromEnv(); err == nil {
 		providers = append(providers, p)
 	} else {
-		log.Printf("resend disabled: %v", err)
+		logger.Warn("resend disabled", "error", err)
 	}
 
 	if p, err := provider.NewBrevoProviderFromEnv(); err == nil {
 		providers = append(providers, p)
 	} else {
-		log.Printf("brevo disabled: %v", err)
+		logger.Warn("brevo disabled", "error", err)
 	}
 
 	failoverSvc, err := service.NewFailoverEmailService(providers...)
 	if err != nil {
-		log.Fatalf("failed to initialize providers: %v", err)
+		logger.Error("failed to initialize providers", "error", err)
+		os.Exit(1)
 	}
 
-	workerPool, err := service.NewWorkerPool(cfg.Workers, cfg.QueueSize, failoverSvc)
+	workerPool, err := service.NewWorkerPool(cfg.Workers, cfg.QueueSize, failoverSvc, logger)
 	if err != nil {
-		log.Fatalf("failed to initialize worker pool: %v", err)
+		logger.Error("failed to initialize worker pool", "error", err)
+		os.Exit(1)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -48,7 +59,9 @@ func main() {
 	workerPool.Start(ctx)
 
 	mux := http.NewServeMux()
-	mux.Handle("/v1/notify", service.NewNotifyHandler(workerPool, cfg.MailFrom))
+	notifyHandler := service.NewNotifyHandler(workerPool, cfg.MailFrom, logger)
+	mux.Handle("/v1/notify", service.TraceIDMiddleware(
+		service.APIKeyAuthMiddleware(cfg.APIKey, notifyHandler, logger)))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -61,24 +74,25 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("notification api listening on :%s", cfg.Port)
+		logger.Info("notification api listening", "port", cfg.Port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("server error: %v", err)
+			logger.Error("server error", "error", err)
+			os.Exit(1)
 		}
 	}()
 
 	<-ctx.Done()
-	log.Println("shutdown signal received")
+	logger.Info("shutdown signal received")
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("http shutdown error: %v", err)
+		logger.Error("http shutdown error", "error", err)
 	}
 
 	workerPool.Stop()
-	log.Println("notification service stopped")
+	logger.Info("notification service stopped")
 }
 
 type Config struct {
@@ -86,6 +100,7 @@ type Config struct {
 	Workers   int
 	QueueSize int
 	MailFrom  string
+	APIKey    string
 }
 
 func loadConfig() Config {
@@ -94,6 +109,7 @@ func loadConfig() Config {
 		Workers:   getEnvAsInt("WORKER_COUNT", 4),
 		QueueSize: getEnvAsInt("QUEUE_SIZE", 100),
 		MailFrom:  getEnv("MAIL_FROM", "no-reply@mongols.app"),
+		APIKey:    getEnv("API_KEY", ""),
 	}
 }
 

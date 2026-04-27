@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/sdblg/notification/pkg/models"
 )
 
 const defaultBrevoEndpoint = "https://api.brevo.com/v3/smtp/email"
@@ -49,7 +51,7 @@ func (b *BrevoProvider) GetName() string {
 	return "brevo"
 }
 
-func (b *BrevoProvider) Send(ctx context.Context, message EmailMessage) error {
+func (b *BrevoProvider) Send(ctx context.Context, message models.EmailMessage) error {
 	payload := map[string]any{
 		"sender": map[string]string{
 			"name":  b.senderName,
@@ -61,11 +63,11 @@ func (b *BrevoProvider) Send(ctx context.Context, message EmailMessage) error {
 		"subject": message.Subject,
 		"headers": message.Headers,
 	}
-	if message.HTML != "" {
-		payload["htmlContent"] = message.HTML
+	if message.Body.Rich != "" {
+		payload["htmlContent"] = message.Body.Rich
 	}
-	if message.Text != "" {
-		payload["textContent"] = message.Text
+	if message.Body.Plain != "" {
+		payload["textContent"] = message.Body.Plain
 	}
 
 	body, err := json.Marshal(payload)
